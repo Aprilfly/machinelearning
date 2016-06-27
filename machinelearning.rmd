@@ -1,0 +1,139 @@
+---
+title: "Predict the Exercise Manner based on the Monitor Device Data"
+author: "MinSong"
+date: "2016/06/25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(data.table)
+library(caret)
+library(kernlab)
+library(rpart)
+library(randomForest)
+library(e1071)
+library(parallel)
+library(doParallel)
+```
+###Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement-a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is to quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is be to use data from accelerometers on the belt,forearm,arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+###The Project Goal
+The goal of project is to predict manner in which they did the exercise, which is the "classe" variable in the training set, with any of the variables in the dataset.Finally use the prediction model to predict 20 different test cases.
+
+###Data Source
+| The training data for this project are available here:
+| [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+| The test data are available here:
+| [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+###Load and Read data
+Load and read data from links, in which "NA", "" and "#DIV/0!" are interpreted as missing values.
+```{r cache=TRUE}
+traindata<-fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",na.strings=c("NA","","#DIV/0!"))
+testdata<-fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",na.strings=c("NA","","#DIV/0!"))
+```
+###Data Preprocess
+Split the Training Datasets into training set and testing set.
+```{r}
+set.seed(1000)
+inTrain<-createDataPartition(y=traindata$classe,p=0.60,list=FALSE)
+training<-traindata[inTrain,]
+testing<-traindata[-inTrain,]
+```
+
+```{r}
+dim(training) 
+dim(testing)
+```
+| Each datasets consists of 160 variables.
+| Eliminate the variables with excessive missing values and that in 1st 7 columns which is not exercise parameters.
+```{r}
+VarNA<-apply(training,2, function (x) length(which(is.na(x))))
+VarNA<-as.data.frame(VarNA)
+##Obtain the column names with no missing value
+Var<-row.names(apply(VarNA,2,function(x) x[x==0]))
+##Eliminate the 1st 7 columns which has nothing to do the predicted variable 'classe'
+Var<-Var[-c(1:7)]
+```
+| There are 52 variables to be used in prediction and 'classe' as the outcome. 
+```{r}
+Var
+```
+| Select the variables used in prediction in training and testing data.
+```{r}
+training<-as.data.frame(training)
+mytraining<-training[which(colnames(training)%in% Var)]
+testing<-as.data.frame(testing)
+mytesting<-testing[which(colnames(testing)%in% Var)]
+```
+| Remove zero covariates in the mytraining and mytesting dataset.
+```{r}
+nsv1<-nearZeroVar(mytraining,saveMetrics=TRUE)
+ntraining<-mytraining[,nsv1$zeroVar==FALSE]
+nsv2<-nearZeroVar(mytesting,saveMetrics=TRUE)
+ntesting<-mytesting[,nsv2$zeroVar==FALSE]
+```
+###Predict with Recursive Partitioning and Regression Trees model
+Fit the model with 'classe' as the outcome and all the remaining varaibles as predictors.
+```{r}
+set.seed(1000)
+modfit<-train(classe~.,method="rpart",data=ntraining)
+```
+The accuracy of the model is only 0.5878310. The probability of predicting 20 test datasets with correct results would only reaches 0.5878310^20=2.426888e-05, which is almost useless in prediction.
+```{r}
+modfit
+```
+The root, nodes, split and possibility of being in each class for each split is presented below for finalModel. 
+```{r}
+modfit$finalModel
+plot(modfit$finalModel,uniform=TRUE,main="Classification Tree")
+text(modfit$finalModel,use.n=TRUE,all=TRUE,cex=.8)
+```
+
+```{r}
+testpredict<-predict(modfit,ntesting)
+confusionMatrix(testpredict,ntesting$classe)
+```
+| From the confusion Matrix, the accuracy of prediction only reaches  0.5523.
+| The In Sample Error is 1- 0.5878310=0.412169.
+| The Out Sample Error is 1- 0.5523=0.4477.
+
+###Predict with Random Forest model
+The algorithm of Random Forest is a time-consuming method, which propels us to use parallel processing. But the tradeoff made in this analysis is changing the resampling method from the default of bootstrapping to k-fold cross-validation. The change in resampling technique may trade processing performance for reduced model accuracy. However experiment indicates that 5 fold cross-validation resampling technique delivered the same accuracy as the more computationally expensive bootstrapping technique. Here we use 10 fold cross-validation resampling.
+
+| The process for executing the random forest model parallely is as follows.
+| 1- Configure parallel processing
+| 2- Configure trainControl object
+| 3- Develop training model
+| 4- De-register parallel processing cluster
+```{r cache=TRUE}
+set.seed(1000)
+##Configure parallel processing
+cluster<-makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+##Configure trainControl object
+fitControl<-trainControl(method="cv",number=10,allowParallel=TRUE)
+modfit2<-train(classe~.,method="rf",data=ntraining,trControl=fitControl)
+##De-register parallel processing cluster
+stopCluster(cluster)
+modfit2
+```
+| The accuracy of the model reaches  0.9912.
+| The In Sample Error is 1- 0.9912=0.0088.
+
+```{r cache=TRUE}
+testpredict2<-predict(modfit2,ntesting)
+confusionMatrix(testpredict2,ntesting$classe)
+```
+| The accuracy of the prediction reaches 0.9898.
+| The Out Sample Error is 0.0102.
+
+###Predict the test data
+```{r }
+testresult<-predict(modfit2,newdata=testdata)
+testresult
+```
+
+
